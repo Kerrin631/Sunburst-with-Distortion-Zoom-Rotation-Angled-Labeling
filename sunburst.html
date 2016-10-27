@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+	<title>Sunburst Distortion</title>
+	<script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.4/jquery.min.js"></script>
+	<script src="https://d3js.org/d3.v3.min.js"></script>
+	<script src="http://labratrevenge.com/d3-tip/javascripts/d3.tip.v0.6.3.js"></script>
+
+<style type="text/css">
+	
+.d3-tip {
+  line-height: 1;
+  font-weight: bold;
+  padding: 12px;
+  background: rgba(0, 0, 0, 0.8);
+  color: #fff;
+  border-radius: 2px;
+}
+
+/* Creates a small triangle extender for the tooltip */
+.d3-tip:after {
+  box-sizing: border-box;
+  display: inline;
+  font-size: 10px;
+  width: 100%;
+  line-height: 1;
+  color: rgba(0, 0, 0, 0.8);
+  content: "\25BC";
+  position: absolute;
+  text-align: center;
+}
+
+/* Style northward tooltips differently */
+.d3-tip.n:after {
+  margin: -1px 0 0 0;
+  top: 100%;
+  left: 0;
+}
+
+path.selected {
+  fill: red;
+  fill-opacity: 100%;
+  stroke-width: 1px;
+  shape-rendering: crisp-edges;
+}
+
+</style>
+</head>
+<body>
+<script>
+
+var width = 960,
+    height = 750,
+    radius = (Math.min(width, height) / 2) - 10;
+
+var color = d3.scale.category20c();
+
+var x = d3.scale.linear()
+    .range([0, 2 * Math.PI]);
+
+var y = d3.scale.linear()
+    .range([0, radius]);
+
+function percent(d) {
+	var percentage = (d.value / 956129) * 100;
+	return percentage.toFixed(2);
+}
+
+// var tip = d3.tip()
+//   .attr('class', 'd3-tip')
+//   .offset([-10, 0])
+//   .html(function(d) {
+//     return "<strong>" + d.name + "</strong> <span style='color:red'>" + percent(d) + "%</span>";
+//   })
+
+var partition = d3.layout.partition()
+    // .value(function(d) { return d.size; });
+    .value(function(d) { return 1; });
+
+var arc = d3.svg.arc()
+    .startAngle(function(d) { return Math.max(0, Math.min(2 * Math.PI, x(d.x))); })
+    .endAngle(function(d) { return Math.max(0, Math.min(2 * Math.PI, x(d.x + d.dx))); })
+    .innerRadius(function(d) { return Math.max(0, y(d.y)) })
+    .outerRadius(function(d) { return Math.max(0, y(d.y + d.dy)) })
+    .cornerRadius(function(d) { return 5;});
+    
+
+var svg = d3.select("body").append("svg")
+    .attr("width", width)
+    .attr("height", height)
+	.append("g")
+    .attr("transform", "translate(" + width / 2 + "," + height / 2 + ")")
+    .append("g")
+    .classed("inner", true);
+
+// svg.call(tip);
+
+d3.json("flare.json", function(error, root) {
+	if (error) throw error;
+
+	var g = svg.selectAll("g")
+		.data(partition.nodes(root))
+		.enter().append("g");
+
+  	path = g.append("path")
+    	.attr("d", arc)
+    	.attr('stroke', 'white')
+    	.attr("fill", function(d) { return color((d.children ? d : d.parent).name); })
+    	.on("click", magnify)
+	    // .on('mouseover', tip.show)
+	    // .on('mouseout', tip.hide)
+    	.each(stash);
+
+	var text = g.append("text")
+    	// .attr("transform", function(d) { return "rotate(" + computeTextRotation(d) + ")"; })
+    	.attr("x", function(d) { return d.x; })
+    	.attr("dx", "6") // margin
+    	.attr("dy", ".35em") // vertical-align
+    	.text(function(d) {
+    		return d.name;
+    	})
+	    .attr('font-size', function(d) {
+
+	    	// if (d.size < 100000) {
+	    	// 	return '10px'
+	    	// } else {
+	    	// 	return '20px';
+	    	// }
+	    	return '10px';
+	    })
+	    .attr("text-anchor", "middle")
+	    .attr("transform", function(d) {
+            if (d.depth > 0) {
+                return "translate(" + arc.centroid(d) + ")" +
+                       "rotate(" + getStartAngle(d) + ")";
+            }  else {
+                return null;
+            }
+        })
+
+
+
+	    .on("click", magnify);
+
+    var innerG = d3.selectAll("g.inner");
+
+
+
+	// Distort the specified node to 80% of its parent.
+	function magnify(node) {
+
+		text.transition().attr("opacity", 0);
+		spin(node);
+		
+		if (parent = node.parent) {
+	    	var parent,
+	        	x = parent.x,
+	        	k = 0.95;
+			parent.children.forEach(function(sibling) {
+				x += reposition(sibling, x, sibling === node
+		          ? parent.dx * k / node.value
+		          : parent.dx * (1 - k) / (parent.value - node.value));
+		    });
+		} else {
+			reposition(node, 0, node.dx / node.value);
+		}
+
+		path.transition()
+		.duration(750)
+		.attrTween("d", arcTween)
+		.each("end", function(e, i) {
+
+	      // check if the animated element's data e lies within the visible angle span given in node
+			if (e.x >= node.x && e.x < (node.x + node.dx)) {
+	        // get a selection of the associated text element
+				var arcText = d3.select(this.parentNode).select("text");
+	        // fade in the text element and recalculate positions
+				arcText.transition().duration(750)
+				.attr("opacity", 1)
+				.attr("x", function(d) {
+					return d.x;
+				})
+				.attr("transform", function(d) {
+		            if (d.depth > 0) {
+		                return "translate(" + arc.centroid(d) + ")" +
+		                       "rotate(" + getNewAngle(d) + ")";
+		            }  else {
+		                return null;
+		            }
+		        });
+			}
+		});
+	    
+	}
+
+	function spin(d) {
+
+		var spin1 = new Promise (function(resolve, reject) {
+			var newAngle = - x(d.x + d.dx / 2);
+			// console.log('newAngle', newAngle)
+
+		    innerG
+		      .transition()
+		        .duration(1500)
+		        .attr("transform", "rotate(" + ((180 / Math.PI * newAngle)) + ")");
+		        resolve("Success!");
+		});
+
+		spin1.then(function() {
+			var newerAngle = - x(d.x + d.dx / 2);
+			// console.log('newerAngle', newerAngle)
+
+		    innerG
+		      .transition()
+		        .duration(1500)
+		        .attr("transform", "rotate(" + ((180 / Math.PI * newerAngle)) + ")");
+		})
+
+	    path
+	      .classed("selected", function (x) { return d.name == x.name; });
+	}
+
+	// Recursively reposition the node at position x with scale k.
+	function reposition(node, x, k) {
+		node.x = x;
+		if (node.children && (n = node.children.length)) {
+			var i = -1, n;
+			while (++i < n) x += reposition(node.children[i], x, k);
+		}
+		return node.dx = node.value * k;
+	}
+
+	// Stash the old values for transition.
+	function stash(d) {
+		d.x0 = d.x;
+		d.dx0 = d.dx;
+	}
+
+	// Interpolate the arcs in data space.
+	function arcTween(a) {
+		var i = d3.interpolate({x: a.x0, dx: a.dx0}, a);
+		return function(t) {
+			var b = i(t);
+			a.x0 = b.x;
+			a.dx0 = b.dx;
+			return arc(b);
+		};
+	};
+});
+
+
+function computeTextRotation(d) {
+  return (x(d.x + d.dx / 2) - Math.PI / 2) / Math.PI * 180;
+}
+
+function getStartAngle(d) {
+    // Offset the angle by 90 deg since the '0' degree axis for arc is Y axis, while
+    // for text it is the X axis.
+    var thetaDeg = (180 / Math.PI * (arc.startAngle()(d) + arc.endAngle()(d)) / 2 - 90);
+    // If we are rotating the text by more than 90 deg, then "flip" it.
+    // This is why "text-anchor", "middle" is important, otherwise, this "flip" would
+    // a little harder.
+    return (thetaDeg > 90) ? thetaDeg - 180 : thetaDeg;
+}
+
+function getNewAngle(d) {
+    // Offset the angle by 90 deg since the '0' degree axis for arc is Y axis, while
+    // for text it is the X axis.
+    var thetaDeg = (180 / Math.PI * (arc.startAngle()(d) + arc.endAngle()(d)) / 2 - 90);
+    // If we are rotating the text by more than 90 deg, then "flip" it.
+    // This is why "text-anchor", "middle" is important, otherwise, this "flip" would
+    // a little harder.
+    return (thetaDeg < 90) ? thetaDeg - 180 : thetaDeg;
+}
+
+</script>
+
+</body>
+</html>
